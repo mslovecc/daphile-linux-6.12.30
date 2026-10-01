@@ -1,4 +1,4 @@
-name: Build Daphile 6.12.30 RT Kernel Tree
+name: Build Daphile Linux Kernel
 
 on:
   workflow_dispatch:
@@ -8,20 +8,31 @@ permissions:
 
 env:
   LINUX_VERSION: "6.12.30"
-  RT_BASE_VERSION: "6.12.28"
-  RT_VERSION: "6.12.28-rt10"
   DAPHILE_RELEASE: "-daphile"
 
+  # PREEMPT_RT
+  RT_BASE_VERSION: "6.12.28"
+  RT_VERSION: "6.12.28-rt10"
+
 jobs:
-  build-kernel-tree:
-    runs-on: ubuntu-24.04
+  build-kernel:
+    runs-on: ubuntu-22.04
 
     steps:
 
-      # ------------------------------------------------------------
-      # 1. Basic packages
-      # ------------------------------------------------------------
-      - name: Install build dependencies
+      # ============================================================
+      # Checkout
+      # ============================================================
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # ============================================================
+      # Dependencies
+      # ============================================================
+
+      - name: Install dependencies
         run: |
           set -eux
 
@@ -37,431 +48,424 @@ jobs:
             libdw-dev \
             dwarves \
             cpio \
+            rsync \
             kmod \
             xz-utils \
             zstd \
-            rsync \
             wget \
-            git \
-            patch \
-            fakeroot
+            patch
 
-      # ------------------------------------------------------------
-      # 2. Download Linux 6.12.30
-      # ------------------------------------------------------------
-      - name: Download Linux 6.12.30
+
+      # ============================================================
+      # Download Linux
+      # ============================================================
+
+      - name: Download Linux ${LINUX_VERSION}
         run: |
           set -eux
 
-          wget -q --show-progress \
-            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VERSION}.tar.xz
+          wget -q \
+            "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VERSION}.tar.xz"
 
-          tar -xf linux-${LINUX_VERSION}.tar.xz
+          tar -xf \
+            "linux-${LINUX_VERSION}.tar.xz"
 
-          mv linux-${LINUX_VERSION} linux-${LINUX_VERSION}-daphile
+          mv \
+            "linux-${LINUX_VERSION}" \
+            "linux-${LINUX_VERSION}-daphile"
 
-      # ------------------------------------------------------------
-      # 3. Download Linux 6.12.28
-      #
-      # RT patch 6.12.28-rt10 is based on Linux 6.12.28.
-      # ------------------------------------------------------------
-      - name: Download Linux RT base 6.12.28
+          ls -ld \
+            "linux-${LINUX_VERSION}-daphile"
+
+
+      # ============================================================
+      # Download PREEMPT_RT
+      # ============================================================
+
+      - name: Download PREEMPT_RT ${RT_VERSION}
         run: |
           set -eux
 
-          wget -q --show-progress \
-            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${RT_BASE_VERSION}.tar.xz
+          wget -q \
+            "https://cdn.kernel.org/pub/linux/kernel/projects/rt/${RT_BASE_VERSION}/patch-${RT_VERSION}.patch.xz"
 
-          tar -xf linux-${RT_BASE_VERSION}.tar.xz
+          xz -d \
+            "patch-${RT_VERSION}.patch.xz"
 
-      # ------------------------------------------------------------
-      # 4. Download official PREEMPT_RT patch
-      # ------------------------------------------------------------
-      - name: Download official RT patch
+          mv \
+            "patch-${RT_VERSION}.patch" \
+            "rt-${RT_VERSION}.patch"
+
+          ls -lh \
+            "rt-${RT_VERSION}.patch"
+
+
+      # ============================================================
+      # Apply PREEMPT_RT
+      # ============================================================
+
+      - name: Apply PREEMPT_RT
+        shell: bash
         run: |
-          set -eux
+          set -euo pipefail
 
-          wget -q --show-progress \
-            https://cdn.kernel.org/pub/linux/kernel/projects/rt/6.12/older/patch-${RT_VERSION}.patch.xz
-
-          xz -d patch-${RT_VERSION}.patch.xz
-
-          test -f patch-${RT_VERSION}.patch
-
-      # ------------------------------------------------------------
-      # 5. Initialize reference Linux 6.12.28 git repository
-      # ------------------------------------------------------------
-      - name: Initialize Linux 6.12.28 reference tree
-        run: |
-          set -eux
-
-          cd linux-${RT_BASE_VERSION}
-
-          git init
-
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-
-          git add -A
-          git commit -m "Linux ${RT_BASE_VERSION} base"
-
-          git tag linux-${RT_BASE_VERSION}-base
-
-      # ------------------------------------------------------------
-      # 6. Verify official RT patch
-      # ------------------------------------------------------------
-      - name: Verify RT patch
-        run: |
-          set -eux
-
-          cd linux-${RT_BASE_VERSION}
-
-          patch --dry-run -p1 < ../patch-${RT_VERSION}.patch
-
-      # ------------------------------------------------------------
-      # 7. Apply official PREEMPT_RT patch
-      # ------------------------------------------------------------
-      - name: Apply official PREEMPT_RT
-        run: |
-          set -eux
-
-          cd linux-${RT_BASE_VERSION}
-
-          patch -p1 < ../patch-${RT_VERSION}.patch
-
-          echo
-          echo "=== Git status after RT patch ==="
-
-          git status --short
-
-      # ------------------------------------------------------------
-      # 8. Commit RT changes
-      # ------------------------------------------------------------
-      - name: Commit PREEMPT_RT tree
-        run: |
-          set -eux
-
-          cd linux-${RT_BASE_VERSION}
-
-          git add -A
-
-          git commit \
-            -m "Apply PREEMPT_RT ${RT_VERSION}"
-
-          git tag rt-${RT_VERSION}
-
-      # ------------------------------------------------------------
-      # 9. Export RT-only patch
-      # ------------------------------------------------------------
-      - name: Export RT patch
-        run: |
-          set -eux
-
-          cd linux-${RT_BASE_VERSION}
-
-          git diff \
-            linux-${RT_BASE_VERSION}-base \
-            rt-${RT_VERSION} \
-            > ../rt-${RT_VERSION}.patch
-
-          echo
-          echo "=== Generated RT patch ==="
-
-          ls -lh ../rt-${RT_VERSION}.patch
-
-          echo
-          echo "Patch size:"
-          wc -c ../rt-${RT_VERSION}.patch
-
-          echo
-          echo "Patch lines:"
-          wc -l ../rt-${RT_VERSION}.patch
-
-          test -s ../rt-${RT_VERSION}.patch
-
-      # ------------------------------------------------------------
-      # 10. Try applying RT patch to Linux 6.12.30
-      #
-      # First try normal patch.
-      # If that fails, try git apply --3way.
-      # ------------------------------------------------------------
-      - name: Port PREEMPT_RT to Linux 6.12.30
-        id: port_rt
-        run: |
-          set -u
-
-          cd linux-${LINUX_VERSION}-daphile
+          cd "linux-${LINUX_VERSION}-daphile"
 
           echo "=========================================="
-          echo "Attempt 1: normal patch"
+          echo "PREEMPT_RT PORT"
           echo "=========================================="
 
-          if patch --dry-run -p1 < ../rt-${RT_VERSION}.patch; then
+          echo "Linux : ${LINUX_VERSION}"
+          echo "RT    : ${RT_VERSION}"
+          echo
 
-            echo "Normal patch applies cleanly."
+          test -f Makefile
+          test -d arch
+          test -d include
+          test -d kernel
 
-            patch -p1 < ../rt-${RT_VERSION}.patch
+          echo "=========================================="
+          echo "RT patch dry-run"
+          echo "=========================================="
 
+          if patch \
+              --dry-run \
+              -p1 \
+              < "../rt-${RT_VERSION}.patch"
+          then
+            echo
+            echo "RT patch applies successfully."
           else
-
             echo
-            echo "Normal patch failed."
-            echo "Trying Git 3-way merge..."
-            echo
-
-            git apply \
-              --3way \
-              --verbose \
-              ../rt-${RT_VERSION}.patch || true
-
-            if git diff --check; then
-              echo
-              echo "Git 3-way application produced no whitespace errors."
-            else
-              echo
-              echo "git diff --check reported problems."
-            fi
-
+            echo "ERROR: RT patch cannot be applied."
+            exit 1
           fi
 
           echo
-          echo "=== Git status ==="
-          git status --short
+          echo "=========================================="
+          echo "Applying RT patch"
+          echo "=========================================="
+
+          patch \
+            -p1 \
+            < "../rt-${RT_VERSION}.patch"
 
           echo
-          echo "=== Conflict markers ==="
+          echo "=========================================="
+          echo "Checking rejected hunks"
+          echo "=========================================="
 
-          CONFLICTS=$(grep -R \
-            -n \
-            -E '^(<<<<<<<|=======|>>>>>>>)' \
-            --exclude-dir=.git \
-            . \
-            2>/dev/null || true)
+          REJECTS=$(
+            find . \
+              -type f \
+              -name '*.rej' \
+              -print
+          )
 
-          if [ -n "$CONFLICTS" ]; then
-
-            echo "REAL MERGE CONFLICTS DETECTED:"
+          if [ -n "$REJECTS" ]; then
             echo
+            echo "ERROR: Rejected hunks:"
+            echo "$REJECTS"
+            exit 1
+          fi
 
-            echo "$CONFLICTS"
+          echo
+          echo "=========================================="
+          echo "Checking conflict markers"
+          echo "=========================================="
 
-            mkdir -p ../rt-conflicts
-
+          CONFLICT_FILES=$(
             grep -R \
               -l \
               -E '^(<<<<<<<|=======|>>>>>>>)' \
               --exclude-dir=.git \
               . \
-              2>/dev/null \
-              | while read f; do
-                  mkdir -p "../rt-conflicts/$(dirname "$f")"
-                  cp "$f" "../rt-conflicts/$f"
-                done
+              2>/dev/null || true
+          )
 
-            echo "conflict" > ../rt-conflicts/STATUS
-
+          if [ -n "$CONFLICT_FILES" ]; then
+            echo
+            echo "ERROR: Conflict markers detected:"
+            echo "$CONFLICT_FILES"
             exit 1
           fi
 
           echo
           echo "=========================================="
-          echo "RT patch successfully ported"
+          echo "PREEMPT_RT SUCCESSFULLY APPLIED"
           echo "=========================================="
 
-      # ------------------------------------------------------------
-      # 11. Configure kernel for external module build
-      #
-      # We do NOT build the complete kernel.
-      #
-      # The purpose of this repository is to provide:
-      #
-      #   .config
-      #   Module.symvers
-      #   generated headers
-      #   scripts
-      #   kernel source
-      #
-      # for Diretta ALSA module compilation.
-      # ------------------------------------------------------------
-      - name: Configure 6.12.30-daphile
-        if: success()
+          echo
+          echo "localversion-rt:"
+
+          if [ -f localversion-rt ]; then
+            cat localversion-rt
+          fi
+
+
+      # ============================================================
+      # Daphile kernel version
+      # ============================================================
+
+      - name: Set Daphile kernel version
         run: |
           set -eux
 
-          cd linux-${LINUX_VERSION}-daphile
+          cd "linux-${LINUX_VERSION}-daphile"
 
-          make ARCH=x86_64 defconfig
-
-          ./scripts/config \
-            --enable CONFIG_PREEMPT_RT \
-            --enable CONFIG_MODULES \
-            --enable CONFIG_MODULE_UNLOAD \
-            --enable CONFIG_MODVERSIONS
-
-          ./scripts/config \
-            --set-str CONFIG_LOCALVERSION "${DAPHILE_RELEASE}"
-
-          make ARCH=x86_64 olddefconfig
+          echo "${DAPHILE_RELEASE}" > localversion-daphile
 
           echo
-          echo "=== Kernel release ==="
-
-          make -s ARCH=x86_64 kernelrelease
+          echo "=== localversion-rt ==="
+          cat localversion-rt || true
 
           echo
-          echo "=== RT configuration ==="
+          echo "=== localversion-daphile ==="
+          cat localversion-daphile
 
-          grep -E \
-            'CONFIG_PREEMPT|CONFIG_PREEMPT_RT|CONFIG_MODULES|CONFIG_MODVERSIONS|CONFIG_LOCALVERSION' \
-            .config || true
+          echo
+          echo "=== Kernel version ==="
+          make kernelversion
 
-      # ------------------------------------------------------------
-      # 12. Prepare kernel build tree
-      #
-      # This is the important part for Diretta.
-      # ------------------------------------------------------------
-      - name: Prepare kernel build tree
-        if: success()
+
+      # ============================================================
+      # Create kernel config
+      # ============================================================
+
+      - name: Create kernel configuration
         run: |
           set -eux
 
-          cd linux-${LINUX_VERSION}-daphile
+          cd "linux-${LINUX_VERSION}-daphile"
 
-          make ARCH=x86_64 prepare
-          make ARCH=x86_64 modules_prepare
+          echo "=========================================="
+          echo "Creating x86_64 kernel configuration"
+          echo "=========================================="
 
-          echo
-          echo "=== Build tree prepared ==="
-
-          test -f Makefile
-          test -f .config
-
-      # ------------------------------------------------------------
-      # 13. Generate Module.symvers
-      #
-      # modules_prepare alone does NOT generate Module.symvers
-      # when CONFIG_MODVERSIONS is enabled.
-      #
-      # Build enough kernel infrastructure to obtain exported
-      # symbol information.
-      # ------------------------------------------------------------
-      - name: Generate Module.symvers
-        if: success()
-        run: |
-          set -eux
-
-          cd linux-${LINUX_VERSION}-daphile
-
-          make -j"$(nproc)" \
+          make \
             ARCH=x86_64 \
+            defconfig
+
+          echo
+          echo "=== PREEMPT CONFIG ==="
+
+          grep \
+            -E '^CONFIG_PREEMPT|^CONFIG_PREEMPT_RT' \
+            .config \
+            || true
+
+
+      # ============================================================
+      # Prepare kernel
+      # ============================================================
+
+      - name: Prepare kernel build tree
+        run: |
+          set -eux
+
+          cd "linux-${LINUX_VERSION}-daphile"
+
+          make \
+            ARCH=x86_64 \
+            olddefconfig
+
+          make \
+            ARCH=x86_64 \
+            prepare
+
+          make \
+            ARCH=x86_64 \
+            modules_prepare
+
+
+      # ============================================================
+      # Build kernel
+      #
+      # This generates Module.symvers.
+      # Repository 2 will use this build tree.
+      # ============================================================
+
+      - name: Build kernel
+        run: |
+          set -eux
+
+          cd "linux-${LINUX_VERSION}-daphile"
+
+          NPROC=$(nproc)
+
+          echo "CPU threads: ${NPROC}"
+
+          make \
+            ARCH=x86_64 \
+            -j"${NPROC}" \
+            bzImage \
             modules
 
-          if [ ! -f Module.symvers ]; then
-            echo
-            echo "ERROR: Module.symvers was not generated."
-            exit 1
-          fi
 
+      # ============================================================
+      # Verify
+      # ============================================================
+
+      - name: Verify kernel build tree
+        run: |
+          set -eux
+
+          cd "linux-${LINUX_VERSION}-daphile"
+
+          echo
+          echo "=========================================="
+          echo "VERIFY BUILD TREE"
+          echo "=========================================="
+
+          echo
+          echo "Kernel release:"
+          make kernelrelease
+
+          echo
+          echo "Config:"
+          ls -lh .config
+
+          echo
+          echo "Module.symvers:"
           ls -lh Module.symvers
 
-      # ------------------------------------------------------------
-      # 14. Set exact Daphile release string
-      # ------------------------------------------------------------
-      - name: Verify kernel release
-        if: success()
+          echo
+          echo "System.map:"
+          ls -lh System.map
+
+          echo
+          echo "Kernel image:"
+          ls -lh arch/x86/boot/bzImage
+
+
+      # ============================================================
+      # Create release package
+      # ============================================================
+
+      - name: Create release package
+        shell: bash
         run: |
           set -eux
 
-          cd linux-${LINUX_VERSION}-daphile
+          KERNEL_DIR="linux-${LINUX_VERSION}-daphile"
 
-          RELEASE=$(make -s ARCH=x86_64 kernelrelease)
+          rm -rf release
 
-          echo "Kernel release: ${RELEASE}"
+          mkdir -p release
 
-          case "${RELEASE}" in
-            6.12.30-daphile)
-              echo "Kernel release is correct."
-              ;;
-            *)
-              echo "ERROR: unexpected kernel release: ${RELEASE}"
-              exit 1
-              ;;
-          esac
+          # --------------------------------------------------------
+          # Required files
+          # --------------------------------------------------------
 
-      # ------------------------------------------------------------
-      # 15. Remove unnecessary build output
-      #
-      # Keep source + generated build information.
-      # This is intended to be consumed by repository 2.
-      # ------------------------------------------------------------
-      - name: Cleanup build tree
-        if: success()
-        run: |
-          set -eux
+          cp \
+            "${KERNEL_DIR}/.config" \
+            release/config
 
-          cd linux-${LINUX_VERSION}-daphile
+          cp \
+            "${KERNEL_DIR}/Module.symvers" \
+            release/Module.symvers
 
-          rm -rf \
-            .git \
-            Documentation \
-            tools/testing \
-            samples
+          cp \
+            "${KERNEL_DIR}/System.map" \
+            release/System.map
 
-          find . \
-            -type f \
-            \( \
-              -name '*.o' \
-              -o -name '*.a' \
-              -o -name '*.cmd' \
-              \) \
-            -delete
+          (
+            cd "${KERNEL_DIR}"
+            make kernelrelease
+          ) > release/kernel.release
 
-      # ------------------------------------------------------------
-      # 16. Package
-      # ------------------------------------------------------------
-      - name: Package kernel build tree
-        if: success()
-        run: |
-          set -eux
+          # --------------------------------------------------------
+          # Build information
+          # --------------------------------------------------------
+
+          cat > release/build-info.txt <<EOF
+Linux version : ${LINUX_VERSION}
+RT version    : ${RT_VERSION}
+Daphile suffix: ${DAPHILE_RELEASE}
+
+Kernel release:
+$(cat release/kernel.release)
+
+Compiler:
+$(gcc --version | head -1)
+
+Build date:
+$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+EOF
+
+          # --------------------------------------------------------
+          # Package complete kernel build tree
+          # --------------------------------------------------------
 
           tar \
             --exclude='.git' \
+            --exclude='*.o' \
+            --exclude='*.a' \
+            --exclude='*.ko' \
+            --exclude='*.tmp' \
             -cJf \
-            linux-${LINUX_VERSION}-daphile-build.tar.xz \
-            linux-${LINUX_VERSION}-daphile
+            "release/linux-${LINUX_VERSION}-daphile-build-tree.tar.xz" \
+            "${KERNEL_DIR}"
 
-          sha256sum \
-            linux-${LINUX_VERSION}-daphile-build.tar.xz \
-            > linux-${LINUX_VERSION}-daphile-build.sha256
+          echo
+          echo "=========================================="
+          echo "RELEASE FILES"
+          echo "=========================================="
 
-          ls -lh \
-            linux-${LINUX_VERSION}-daphile-build.tar.xz \
-            linux-${LINUX_VERSION}-daphile-build.sha256
+          ls -lh release
 
-      # ------------------------------------------------------------
-      # 17. Upload artifact
-      # ------------------------------------------------------------
-      - name: Upload build tree artifact
-        if: always()
+
+      # ============================================================
+      # GitHub Actions artifact
+      # ============================================================
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: daphile-linux-${{ env.LINUX_VERSION }}-build
-          path: |
-            linux-${{ env.LINUX_VERSION }}-daphile-build.tar.xz
-            linux-${{ env.LINUX_VERSION }}-daphile-build.sha256
-            rt-conflicts/**
-          if-no-files-found: warn
+          name: linux-${{ env.LINUX_VERSION }}-daphile-build
+          path: release/
 
-      # ------------------------------------------------------------
-      # 18. Create Release
-      # ------------------------------------------------------------
+
+      # ============================================================
+      # GitHub Release
+      # ============================================================
+
       - name: Create GitHub Release
-        if: success()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: daphile-${{ env.LINUX_VERSION }}-rt
-          name: Daphile Linux ${{ env.LINUX_VERSION }} RT Build Tree
-          generate_release_notes: true
+          tag_name: "linux-${{ env.LINUX_VERSION }}-daphile-rt"
+          name: "Daphile Linux ${{ env.LINUX_VERSION }} RT"
+          body: |
+            Daphile Linux kernel build tree.
+
+            Linux:
+            ${{ env.LINUX_VERSION }}
+
+            PREEMPT_RT:
+            ${{ env.RT_VERSION }}
+
+            Daphile suffix:
+            ${{ env.DAPHILE_RELEASE }}
+
+            This release is intended for building
+            external kernel modules such as Diretta
+            alsa_bridge.ko.
+
+            Included:
+
+            - linux-${{ env.LINUX_VERSION }}-daphile-build-tree.tar.xz
+            - config
+            - Module.symvers
+            - System.map
+            - kernel.release
+            - build-info.txt
+
           files: |
-            linux-${{ env.LINUX_VERSION }}-daphile-build.tar.xz
-            linux-${{ env.LINUX_VERSION }}-daphile-build.sha256
+            release/linux-${{ env.LINUX_VERSION }}-daphile-build-tree.tar.xz
+            release/config
+            release/Module.symvers
+            release/System.map
+            release/kernel.release
+            release/build-info.txt
+
+          fail_on_unmatched_files: false
