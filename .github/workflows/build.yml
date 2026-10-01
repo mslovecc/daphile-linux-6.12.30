@@ -1,4 +1,3 @@
-```yaml
 name: Build Daphile 6.12.30 RT Kernel Tree
 
 on:
@@ -472,4 +471,3 @@ jobs:
           files: |
             linux-${{ env.LINUX_VERSION }}-daphile-build.tar.xz
             linux-${{ env.LINUX_VERSION }}-daphile-build.sha256
-```
