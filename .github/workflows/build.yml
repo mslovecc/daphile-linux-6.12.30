@@ -69,7 +69,7 @@ jobs:
           set -e
 
           wget -q \
-            "https://cdn.kernel.org/pub/linux/kernel/projects/rt/${RT_BASE_VERSION}/patch-${RT_VERSION}.patch.xz"
+            "https://cdn.kernel.org/pub/linux/kernel/projects/rt/6.12/older/patch-${RT_VERSION}.patch.xz"
 
           xz -d \
             "patch-${RT_VERSION}.patch.xz"
