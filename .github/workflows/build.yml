@@ -75,7 +75,7 @@ jobs:
           echo "Downloading RT ${RT_VERSION}"
 
           wget -q \
-            "https://www.kernel.org/pub/linux/kernel/projects/rt/${RT_BASE_VERSION}/patch-${RT_VERSION}.patch.xz" \
+            "https://www.kernel.org/pub/linux/kernel/projects/rt/6.12/older/patch-6.12.28-rt10.patch.xz" \
             -O "patch-${RT_VERSION}.patch.xz"
 
           xz -d \
