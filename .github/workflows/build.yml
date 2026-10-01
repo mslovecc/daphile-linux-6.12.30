@@ -89,45 +89,9 @@ jobs:
           test -f patch-${RT_VERSION}.patch
 
       # ------------------------------------------------------------
-      # 5. Verify RT patch against its correct base kernel
+      # 5. Initialize reference Linux 6.12.28 git repository
       # ------------------------------------------------------------
-      - name: Verify RT patch on Linux 6.12.28
-        run: |
-          set -eux
-
-          cd linux-${RT_BASE_VERSION}
-
-          echo "Testing official PREEMPT_RT patch:"
-          echo "patch-${RT_VERSION}.patch"
-
-          patch --dry-run -p1 < ../patch-${RT_VERSION}.patch
-
-      # ------------------------------------------------------------
-      # 6. Apply RT patch to Linux 6.12.28
-      # ------------------------------------------------------------
-      - name: Build reference RT tree
-        run: |
-          set -eux
-
-          cd linux-${RT_BASE_VERSION}
-
-          patch -p1 < ../patch-${RT_VERSION}.patch
-
-          echo
-          echo "=== RT CONFIG SEARCH ==="
-
-          grep -R \
-            "PREEMPT_RT" \
-            arch kernel init include \
-            2>/dev/null | head -50 || true
-
-      # ------------------------------------------------------------
-      # 7. Initialize git repository for reference tree
-      #
-      # This allows us to produce a portable diff that represents
-      # the RT modifications.
-      # ------------------------------------------------------------
-      - name: Create reference RT git tree
+      - name: Initialize Linux 6.12.28 reference tree
         run: |
           set -eux
 
@@ -143,13 +107,51 @@ jobs:
 
           git tag linux-${RT_BASE_VERSION}-base
 
+      # ------------------------------------------------------------
+      # 6. Verify official RT patch
+      # ------------------------------------------------------------
+      - name: Verify RT patch
+        run: |
+          set -eux
+
+          cd linux-${RT_BASE_VERSION}
+
+          patch --dry-run -p1 < ../patch-${RT_VERSION}.patch
+
+      # ------------------------------------------------------------
+      # 7. Apply official PREEMPT_RT patch
+      # ------------------------------------------------------------
+      - name: Apply official PREEMPT_RT
+        run: |
+          set -eux
+
+          cd linux-${RT_BASE_VERSION}
+
+          patch -p1 < ../patch-${RT_VERSION}.patch
+
+          echo
+          echo "=== Git status after RT patch ==="
+
+          git status --short
+
+      # ------------------------------------------------------------
+      # 8. Commit RT changes
+      # ------------------------------------------------------------
+      - name: Commit PREEMPT_RT tree
+        run: |
+          set -eux
+
+          cd linux-${RT_BASE_VERSION}
+
           git add -A
-          git commit -m "Apply PREEMPT_RT ${RT_VERSION}"
+
+          git commit \
+            -m "Apply PREEMPT_RT ${RT_VERSION}"
 
           git tag rt-${RT_VERSION}
 
       # ------------------------------------------------------------
-      # 8. Create RT-only patch
+      # 9. Export RT-only patch
       # ------------------------------------------------------------
       - name: Export RT patch
         run: |
@@ -162,28 +164,20 @@ jobs:
             rt-${RT_VERSION} \
             > ../rt-${RT_VERSION}.patch
 
-          test -s ../rt-${RT_VERSION}.patch
+          echo
+          echo "=== Generated RT patch ==="
 
+          ls -lh ../rt-${RT_VERSION}.patch
+
+          echo
+          echo "Patch size:"
+          wc -c ../rt-${RT_VERSION}.patch
+
+          echo
+          echo "Patch lines:"
           wc -l ../rt-${RT_VERSION}.patch
 
-      # ------------------------------------------------------------
-      # 9. Prepare Linux 6.12.30 as git repository
-      # ------------------------------------------------------------
-      - name: Initialize Linux 6.12.30 git tree
-        run: |
-          set -eux
-
-          cd linux-${LINUX_VERSION}-daphile
-
-          git init
-
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-
-          git add -A
-          git commit -m "Linux ${LINUX_VERSION} base"
-
-          git tag linux-${LINUX_VERSION}-base
+          test -s ../rt-${RT_VERSION}.patch
 
       # ------------------------------------------------------------
       # 10. Try applying RT patch to Linux 6.12.30
