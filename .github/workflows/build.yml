@@ -1,0 +1,184 @@
+name: Build Daphile Linux 6.12.30 RT
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  KERNEL_VERSION: "6.12.30"
+  DAPHILE_RELEASE: "-daphile"
+  RT_VERSION: "6.12.30-rt12"
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            dwarves \
+            libdw-dev \
+            fakeroot \
+            cpio \
+            kmod \
+            xz-utils \
+            wget \
+            curl \
+            git
+
+      - name: Download Linux 6.12.30
+        run: |
+          wget -q \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz
+
+          tar -xf linux-${KERNEL_VERSION}.tar.xz
+
+      - name: Download PREEMPT_RT patch
+        run: |
+          wget -q \
+            https://cdn.kernel.org/pub/linux/kernel/projects/rt/${KERNEL_VERSION}/patch-${RT_VERSION}.patch.xz
+
+          xz -d patch-${RT_VERSION}.patch.xz
+
+      - name: Apply PREEMPT_RT
+        run: |
+          cd linux-${KERNEL_VERSION}
+
+          patch -p1 < ../patch-${RT_VERSION}.patch
+
+      - name: Configure kernel
+        run: |
+          cd linux-${KERNEL_VERSION}
+
+          make ARCH=x86_64 defconfig
+
+          ./scripts/config \
+            --set-str EXTRAVERSION "${DAPHILE_RELEASE}" \
+            --enable CONFIG_PREEMPT_RT \
+            --disable CONFIG_DEBUG_INFO \
+            --disable CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT
+
+          make olddefconfig
+
+      - name: Show kernel configuration
+        run: |
+          cd linux-${KERNEL_VERSION}
+
+          echo "=== Kernel release ==="
+          make kernelrelease
+
+          echo
+          echo "=== PREEMPT ==="
+          grep -E \
+            'CONFIG_PREEMPT|CONFIG_PREEMPT_RT' \
+            .config || true
+
+          echo
+          echo "=== MODVERSIONS ==="
+          grep CONFIG_MODVERSIONS .config || true
+
+      - name: Build kernel and Module.symvers
+        run: |
+          cd linux-${KERNEL_VERSION}
+
+          make -j"$(nproc)" \
+            ARCH=x86_64 \
+            CC=gcc
+
+      - name: Verify build tree
+        run: |
+          cd linux-${KERNEL_VERSION}
+
+          echo "=== kernelrelease ==="
+          make kernelrelease
+
+          echo
+          echo "=== files ==="
+          ls -lh \
+            .config \
+            Module.symvers \
+            System.map \
+            Makefile
+
+          echo
+          echo "=== Module.symvers ==="
+          wc -c Module.symvers
+
+          echo
+          echo "=== kernel release ==="
+          cat include/config/kernel.release
+
+          test -s Module.symvers
+          test -f .config
+          test -f System.map
+
+      - name: Prepare external module build tree
+        run: |
+          cd linux-${KERNEL_VERSION}
+
+          make modules_prepare
+
+      - name: Create kernel build package
+        run: |
+          mkdir -p release/linux-${KERNEL_VERSION}-daphile
+
+          rsync -a \
+            --exclude='.git' \
+            --exclude='*.o' \
+            --exclude='*.a' \
+            --exclude='*.cmd' \
+            --exclude='*.ko' \
+            --exclude='*.dtb' \
+            --exclude='vmlinux' \
+            --exclude='vmlinux.o' \
+            --exclude='bzImage' \
+            linux-${KERNEL_VERSION}/ \
+            release/linux-${KERNEL_VERSION}-daphile/
+
+          cd release
+
+          tar -czf \
+            linux-${KERNEL_VERSION}-daphile-build.tar.gz \
+            linux-${KERNEL_VERSION}-daphile
+
+      - name: Generate checksum
+        run: |
+          cd release
+
+          sha256sum \
+            linux-${KERNEL_VERSION}-daphile-build.tar.gz \
+            > SHA256SUMS
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ env.KERNEL_VERSION }}-daphile-build
+          path: |
+            release/linux-${{ env.KERNEL_VERSION }}-daphile-build.tar.gz
+            release/SHA256SUMS
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/linux-${{ env.KERNEL_VERSION }}-daphile-build.tar.gz
+            release/SHA256SUMS
