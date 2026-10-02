@@ -1,0 +1,33 @@
+echo "=== KERNEL CONFIG ==="
+
+grep -E \
+'CONFIG_PREEMPT=|CONFIG_PREEMPT_RT=|CONFIG_PREEMPT_DYNAMIC=|CONFIG_PREEMPTION=' \
+"${KERNEL_DIR}/.config" || true
+
+echo
+echo "=== AUTO CONFIG ==="
+
+grep -E \
+'CONFIG_PREEMPT=|CONFIG_PREEMPT_RT=|CONFIG_PREEMPT_DYNAMIC=|CONFIG_PREEMPTION=' \
+"${KERNEL_DIR}/include/config/auto.conf" || true
+
+echo
+echo "=== VERMAGIC HEADER ==="
+
+grep -n \
+-P 'PREEMPT|RT' \
+"${KERNEL_DIR}/include/linux/vermagic.h" || true
+
+echo
+echo "=== KERNEL RELEASE ==="
+
+make -C "${KERNEL_DIR}" kernelrelease
+
+echo
+echo "=== MODULE BUILD CONFIG ==="
+
+make -C "${KERNEL_DIR}" \
+  ARCH=x86_64 \
+  CC=gcc-11 \
+  M="${GITHUB_WORKSPACE}/daphile-diretta-build" \
+  modules
