@@ -1,933 +1,321 @@
-name: v3 Build Daphile Linux 6.12.30 PREEMPT_RT
+name: Build Daphile Linux 6.12.30 PREEMPT_RT
 
 on:
-  workflow_dispatch:
+workflow_dispatch:
 
 permissions:
-  contents: write
+contents: write
 
 env:
-  LINUX_VERSION: "6.12.28"
-  TARGET_VERSION: "6.12.30"
-  DAPHILE_RELEASE: "-daphile"
-  RT_VERSION: "6.12.28-rt10"
+LINUX_VERSION: "6.12.28"
+TARGET_VERSION: "6.12.30"
+DAPHILE_RELEASE: "-daphile"
+RT_VERSION: "6.12.28-rt10"
 
 jobs:
-  build-kernel:
-    runs-on: ubuntu-22.04
-
-    steps:
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install build dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          sudo apt-get update
-
-          sudo apt-get install -y \
-            build-essential \
-            bc \
-            bison \
-            flex \
-            libssl-dev \
-            libelf-dev \
-            libdw-dev \
-            dwarves \
-            cpio \
-            rsync \
-            kmod \
-            xz-utils \
-            zstd \
-            wget \
-            patch
-
-      - name: Download Linux 6.12.28
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=========================================="
-          echo "DOWNLOAD LINUX SOURCE"
-          echo "=========================================="
-
-          echo "Source version:"
-          echo "${LINUX_VERSION}"
-
-          wget -q \
-            "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VERSION}.tar.xz" \
-            -O \
-            "linux-${LINUX_VERSION}.tar.xz"
-
-          echo
-          echo "Archive:"
-          ls -lh \
-            "linux-${LINUX_VERSION}.tar.xz"
-
-          echo
-          echo "Extracting..."
-
-          tar -xf \
-            "linux-${LINUX_VERSION}.tar.xz"
-
-          mv \
-            "linux-${LINUX_VERSION}" \
-            "linux-${TARGET_VERSION}-daphile"
-
-          echo
-          echo "Kernel source:"
-          ls -ld \
-            "linux-${TARGET_VERSION}-daphile"
-
-      - name: Download PREEMPT_RT patch
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=========================================="
-          echo "DOWNLOAD PREEMPT_RT PATCH"
-          echo "=========================================="
-
-          echo "RT patch:"
-          echo "${RT_VERSION}"
-
-          wget -q \
-            "https://cdn.kernel.org/pub/linux/kernel/projects/rt/6.12/older/patch-${RT_VERSION}.patch.xz" \
-            -O \
-            "patch-${RT_VERSION}.patch.xz"
-
-          echo
-          echo "RT archive:"
-          ls -lh \
-            "patch-${RT_VERSION}.patch.xz"
-
-          xz -d \
-            "patch-${RT_VERSION}.patch.xz"
-
-          mv \
-            "patch-${RT_VERSION}.patch" \
-            "rt-${RT_VERSION}.patch"
-
-          echo
-          echo "RT patch:"
-          ls -lh \
-            "rt-${RT_VERSION}.patch"
-
-      - name: Verify RT patch
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=========================================="
-          echo "VERIFY PREEMPT_RT PATCH"
-          echo "=========================================="
-
-          if [ ! -s "rt-${RT_VERSION}.patch" ]; then
-            echo "ERROR: RT patch does not exist."
-            exit 1
-          fi
-
-          echo
-          echo "Patch:"
-          ls -lh \
-            "rt-${RT_VERSION}.patch"
-
-          echo
-          echo "Patch header:"
-          head -30 \
-            "rt-${RT_VERSION}.patch"
-
-      - name: Apply PREEMPT_RT patch
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${TARGET_VERSION}-daphile"
-
-          cd "${KERNEL_DIR}"
-
-          echo "=========================================="
-          echo "APPLY PREEMPT_RT"
-          echo "=========================================="
-
-          echo
-          echo "Kernel source:"
-          pwd
-
-          echo
-          echo "RT patch:"
-          echo "${RT_VERSION}"
-
-          echo
-          echo "=========================================="
-          echo "PATCH DRY RUN"
-          echo "=========================================="
-
-          patch \
-            --dry-run \
-            --batch \
-            --forward \
-            -p1 \
-            < "../rt-${RT_VERSION}.patch"
-
-          echo
-          echo "Dry run successful."
-
-          echo
-          echo "=========================================="
-          echo "APPLY PATCH"
-          echo "=========================================="
-
-          patch \
-            --batch \
-            --forward \
-            -p1 \
-            < "../rt-${RT_VERSION}.patch"
-
-          echo
-          echo "Patch applied."
-
-          echo
-          echo "=========================================="
-          echo "CHECK REJECTS"
-          echo "=========================================="
-
-          REJECTS="$(find . -type f -name '*.rej' -print)"
-
-          if [ -n "${REJECTS}" ]; then
-            echo "ERROR: rejected patch hunks found:"
-            echo "${REJECTS}"
-            exit 1
-          fi
-
-          echo "No rejected hunks."
-
-          echo
-          echo "=========================================="
-          echo "CHECK CONFLICT MARKERS"
-          echo "=========================================="
-
-          CONFLICTS="$(
-            grep -R \
-              -n \
-              -E '^(<<<<<<<|=======|>>>>>>>)' \
-              --exclude-dir=.git \
-              . \
-              2>/dev/null || true
-          )"
-
-          if [ -n "${CONFLICTS}" ]; then
-            echo "ERROR: conflict markers detected:"
-            echo
-            echo "${CONFLICTS}"
-            exit 1
-          fi
-
-          echo "No conflict markers."
-
-      - name: Force kernel version to 6.12.30
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${TARGET_VERSION}-daphile"
-
-          cd "${KERNEL_DIR}"
-
-          echo "=========================================="
-          echo "FORCE KERNEL VERSION"
-          echo "=========================================="
-
-          echo
-          echo "Original kernel version:"
-          make kernelversion
-
-          echo
-          echo "Changing source version:"
-          echo "6.12.28 -> 6.12.30"
-
-          sed -i \
-            's/^VERSION = 6$/VERSION = 6/' \
-            Makefile
-
-          sed -i \
-            's/^PATCHLEVEL = 12$/PATCHLEVEL = 12/' \
-            Makefile
-
-          sed -i \
-            's/^SUBLEVEL = 28$/SUBLEVEL = 30/' \
-            Makefile
-
-          rm -f \
-            localversion-rt
-
-          printf '%s\n' \
-            "${DAPHILE_RELEASE}" \
-            > localversion-daphile
-
-          echo
-          echo "Kernel Makefile version:"
-          grep -E \
-            '^(VERSION|PATCHLEVEL|SUBLEVEL) =' \
-            Makefile
-
-          echo
-          echo "localversion-daphile:"
-          cat \
-            localversion-daphile
-
-          echo
-          echo "Kernel version after modification:"
-          make kernelversion
-
-      - name: Create PREEMPT_RT configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${TARGET_VERSION}-daphile"
-
-          cd "${KERNEL_DIR}"
-
-          echo "=========================================="
-          echo "CREATE PREEMPT_RT CONFIGURATION"
-          echo "=========================================="
-
-          make \
-            ARCH=x86_64 \
-            defconfig
-
-          echo
-          echo "=========================================="
-          echo "ENABLE REQUIRED OPTIONS"
-          echo "=========================================="
-
-          ./scripts/config \
-            --enable CONFIG_EXPERT
-
-          ./scripts/config \
-            --enable CONFIG_SMP
-
-          ./scripts/config \
-            --enable CONFIG_MODULES
-
-          ./scripts/config \
-            --enable CONFIG_MODULE_UNLOAD
-
-          ./scripts/config \
-            --enable CONFIG_PREEMPT_RT
-
-          echo
-          echo "=========================================="
-          echo "DISABLE PREEMPT_DYNAMIC"
-          echo "=========================================="
-
-          ./scripts/config \
-            --disable CONFIG_PREEMPT_DYNAMIC
-
-          echo
-          echo "=========================================="
-          echo "ENABLE PREEMPTION"
-          echo "=========================================="
-
-          ./scripts/config \
-            --enable CONFIG_PREEMPTION
-
-          echo
-          echo "=========================================="
-          echo "NORMALIZE CONFIGURATION"
-          echo "=========================================="
-
-          make \
-            ARCH=x86_64 \
-            olddefconfig
-
-          echo
-          echo "=========================================="
-          echo "RESULTING CONFIGURATION"
-          echo "=========================================="
-
-          grep -E \
-            '^CONFIG_(EXPERT|SMP|PREEMPT|PREEMPTION|PREEMPT_RT|PREEMPT_DYNAMIC|MODULES|MODULE_UNLOAD)=' \
-            .config \
-            || true
-
-      - name: Verify PREEMPT_RT configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${TARGET_VERSION}-daphile"
-
-          cd "${KERNEL_DIR}"
-
-          echo "=========================================="
-          echo "VERIFY PREEMPT_RT CONFIGURATION"
-          echo "=========================================="
-
-          echo
-          echo "Required configuration:"
-
-          grep '^CONFIG_EXPERT=' \
-            .config
-
-          grep '^CONFIG_SMP=' \
-            .config
-
-          grep '^CONFIG_PREEMPTION=' \
-            .config
-
-          grep '^CONFIG_PREEMPT_RT=' \
-            .config
-
-          grep '^CONFIG_MODULES=' \
-            .config
-
-          grep '^CONFIG_MODULE_UNLOAD=' \
-            .config
-
-          echo
-          echo "PREEMPT_DYNAMIC:"
-          grep '^CONFIG_PREEMPT_DYNAMIC=' \
-            .config \
-            || echo "CONFIG_PREEMPT_DYNAMIC is not set"
-
-          echo
-          echo "=========================================="
-          echo "STRICT CONFIG CHECK"
-          echo "=========================================="
-
-          grep -q '^CONFIG_EXPERT=y$' \
-            .config
-
-          grep -q '^CONFIG_SMP=y$' \
-            .config
-
-          grep -q '^CONFIG_PREEMPTION=y$' \
-            .config
-
-          grep -q '^CONFIG_PREEMPT_RT=y$' \
-            .config
-
-          grep -q '^CONFIG_MODULES=y$' \
-            .config
-
-          grep -q '^CONFIG_MODULE_UNLOAD=y$' \
-            .config
-
-          if grep -q '^CONFIG_PREEMPT_DYNAMIC=y$' .config; then
-            echo
-            echo "ERROR: CONFIG_PREEMPT_DYNAMIC=y"
-            echo "PREEMPT_DYNAMIC must not be enabled."
-            exit 1
-          fi
-
-          echo
-          echo "PREEMPT_RT configuration passed."
-
-      - name: Prepare kernel
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${TARGET_VERSION}-daphile"
-
-          cd "${KERNEL_DIR}"
-
-          echo "=========================================="
-          echo "PREPARE KERNEL"
-          echo "=========================================="
-
-          make \
-            ARCH=x86_64 \
-            prepare
-
-          make \
-            ARCH=x86_64 \
-            modules_prepare
-
-          echo
-          echo "Kernel preparation completed."
-
-      - name: Verify generated kernel configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${TARGET_VERSION}-daphile"
-
-          cd "${KERNEL_DIR}"
-
-          echo "=========================================="
-          echo "VERIFY GENERATED CONFIGURATION"
-          echo "=========================================="
-
-          echo
-          echo "include/config/auto.conf:"
-          if [ ! -f include/config/auto.conf ]; then
-            echo "ERROR: include/config/auto.conf not found."
-            exit 1
-          fi
-
-          ls -lh \
-            include/config/auto.conf
-
-          echo
-          echo "include/generated/autoconf.h:"
-          if [ ! -f include/generated/autoconf.h ]; then
-            echo "ERROR: include/generated/autoconf.h not found."
-            exit 1
-          fi
-
-          ls -lh \
-            include/generated/autoconf.h
-
-          echo
-          echo "Generated CONFIG_PREEMPT_RT:"
-          grep '^CONFIG_PREEMPT_RT=' \
-            include/config/auto.conf
-
-          echo
-          echo "Generated CONFIG_PREEMPT_DYNAMIC:"
-          grep '^CONFIG_PREEMPT_DYNAMIC=' \
-            include/config/auto.conf \
-            || echo "CONFIG_PREEMPT_DYNAMIC is not set"
-
-          if ! grep -q '^CONFIG_PREEMPT_RT=y$' include/config/auto.conf; then
-            echo "ERROR: generated auto.conf does not contain CONFIG_PREEMPT_RT=y"
-            exit 1
-          fi
-
-          if grep -q '^CONFIG_PREEMPT_DYNAMIC=y$' include/config/auto.conf; then
-            echo "ERROR: generated auto.conf contains CONFIG_PREEMPT_DYNAMIC=y"
-            exit 1
-          fi
-
-          echo
-          echo "Generated kernel configuration is correct."
-
-      - name: Verify kernel release
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${TARGET_VERSION}-daphile"
-
-          cd "${KERNEL_DIR}"
-
-          KERNEL_RELEASE_ACTUAL="$(make kernelrelease)"
-
-          echo "=========================================="
-          echo "VERIFY KERNEL RELEASE"
-          echo "=========================================="
-
-          echo
-          echo "Actual:"
-          echo "${KERNEL_RELEASE_ACTUAL}"
-
-          echo
-          echo "Expected:"
-          echo "6.12.30-daphile"
-
-          if [ "${KERNEL_RELEASE_ACTUAL}" != "6.12.30-daphile" ]; then
-            echo
-            echo "ERROR: kernel release mismatch."
-            exit 1
-          fi
-
-          printf '%s\n' \
-            "${KERNEL_RELEASE_ACTUAL}" \
-            > "${GITHUB_WORKSPACE}/kernel.release"
-
-          echo
-          echo "Kernel release verified."
-
-      - name: Verify external module PREEMPT_RT before kernel build
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${TARGET_VERSION}-daphile"
-          TEST_DIR="${GITHUB_WORKSPACE}/test-external-module"
-
-          echo "=========================================="
-          echo "VERIFY EXTERNAL MODULE PREEMPT_RT"
-          echo "=========================================="
-
-          echo
-          echo "Kernel build tree:"
-          echo "${KERNEL_DIR}"
-
-          echo
-          echo "Kernel release:"
-          cd "${KERNEL_DIR}"
-          KERNEL_RELEASE_ACTUAL="$(make kernelrelease)"
-          echo "${KERNEL_RELEASE_ACTUAL}"
-
-          rm -rf \
-            "${TEST_DIR}"
-
-          mkdir -p \
-            "${TEST_DIR}"
-
-          cat > "${TEST_DIR}/test_module.c" <<'EOF'
-#include <linux/module.h>
-#include <linux/kernel.h>
-
-static int __init test_module_init(void)
-{
-    pr_info("Daphile PREEMPT_RT module test loaded\n");
-    return 0;
-}
-
-static void __exit test_module_exit(void)
-{
-    pr_info("Daphile PREEMPT_RT module test unloaded\n");
-}
-
-module_init(test_module_init);
-module_exit(test_module_exit);
-
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Daphile");
-MODULE_DESCRIPTION("Daphile PREEMPT_RT external module test");
-EOF
-
-          cat > "${TEST_DIR}/Makefile" <<'EOF'
-obj-m += test_module.o
-EOF
-
-          echo
-          echo "=========================================="
-          echo "BUILD TEST MODULE"
-          echo "=========================================="
-
-          make \
-            -C "${KERNEL_DIR}" \
-            ARCH=x86_64 \
-            M="${TEST_DIR}" \
-            modules
-
-          KO="${TEST_DIR}/test_module.ko"
-
-          if [ ! -f "${KO}" ]; then
-            echo
-            echo "ERROR: test_module.ko was not generated."
-            exit 1
-          fi
-
-          echo
-          echo "=========================================="
-          echo "VERIFY TEST MODULE"
-          echo "=========================================="
-
-          echo
-          echo "Module:"
-          ls -lh \
-            "${KO}"
-
-          echo
-          echo "File:"
-          file \
-            "${KO}"
-
-          echo
-          echo "modinfo:"
-          modinfo \
-            "${KO}"
-
-          TEST_VERMAGIC="$(modinfo -F vermagic "${KO}")"
-
-          echo
-          echo "=========================================="
-          echo "ACTUAL VERMAGIC"
-          echo "=========================================="
-
-          echo "${TEST_VERMAGIC}"
-
-          echo
-          echo "=========================================="
-          echo "VERIFY PREEMPT_RT VERMAGIC"
-          echo "=========================================="
-
-          EXPECTED_PREFIX="${KERNEL_RELEASE_ACTUAL} SMP"
-
-          case "${TEST_VERMAGIC}" in
-            "${KERNEL_RELEASE_ACTUAL}"*"preempt_rt"*"mod_unload"*)
-              echo
-              echo "PREEMPT_RT vermagic VERIFIED."
-              ;;
-            *)
-              echo
-              echo "ERROR: PREEMPT_RT vermagic is incorrect."
-              echo
-              echo "Expected:"
-              echo "${KERNEL_RELEASE_ACTUAL} ... preempt_rt ... mod_unload"
-              echo
-              echo "Actual:"
-              echo "${TEST_VERMAGIC}"
-              exit 1
-              ;;
-          esac
-
-          echo
-          echo "=========================================="
-          echo "EXTERNAL MODULE PREEMPT_RT VERIFIED"
-          echo "=========================================="
-
-      - name: Build kernel
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${TARGET_VERSION}-daphile"
-
-          cd "${KERNEL_DIR}"
-
-          echo "=========================================="
-          echo "BUILD LINUX KERNEL"
-          echo "=========================================="
-
-          NPROC="$(nproc)"
-
-          echo
-          echo "CPU threads:"
-          echo "${NPROC}"
-
-          make \
-            ARCH=x86_64 \
-            -j"${NPROC}" \
-            bzImage \
-            modules
-
-      - name: Verify final kernel build
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${TARGET_VERSION}-daphile"
-
-          cd "${KERNEL_DIR}"
-
-          echo "=========================================="
-          echo "VERIFY FINAL KERNEL BUILD"
-          echo "=========================================="
-
-          KERNEL_RELEASE_ACTUAL="$(make kernelrelease)"
-
-          echo
-          echo "Kernel version:"
-          make kernelversion
-
-          echo
-          echo "Kernel release:"
-          echo "${KERNEL_RELEASE_ACTUAL}"
-
-          if [ "${KERNEL_RELEASE_ACTUAL}" != "6.12.30-daphile" ]; then
-            echo "ERROR: unexpected kernel release."
-            exit 1
-          fi
-
-          echo
-          echo "CONFIG_PREEMPT_RT:"
-          grep '^CONFIG_PREEMPT_RT=' \
-            .config
-
-          echo
-          echo "CONFIG_PREEMPT_DYNAMIC:"
-          grep '^CONFIG_PREEMPT_DYNAMIC=' \
-            .config \
-            || echo "CONFIG_PREEMPT_DYNAMIC is not set"
-
-          echo
-          echo "CONFIG_MODULES:"
-          grep '^CONFIG_MODULES=' \
-            .config
-
-          echo
-          echo "CONFIG_MODULE_UNLOAD:"
-          grep '^CONFIG_MODULE_UNLOAD=' \
-            .config
-
-          echo
-          echo "Kernel image:"
-          ls -lh \
-            arch/x86/boot/bzImage
-
-          echo
-          echo "Module.symvers:"
-          ls -lh \
-            Module.symvers
-
-          echo
-          echo "System.map:"
-          ls -lh \
-            System.map
-
-          echo
-          echo "Final kernel build verified."
-
-      - name: Create release package
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${TARGET_VERSION}-daphile"
-
-          rm -rf \
-            release
-
-          mkdir -p \
-            release
-
-          echo "=========================================="
-          echo "CREATE RELEASE PACKAGE"
-          echo "=========================================="
-
-          cp \
-            "${KERNEL_DIR}/.config" \
-            release/config
-
-          cp \
-            "${KERNEL_DIR}/Module.symvers" \
-            release/Module.symvers
-
-          cp \
-            "${KERNEL_DIR}/System.map" \
-            release/System.map
-
-          cp \
-            "${KERNEL_DIR}/arch/x86/boot/bzImage" \
-            release/bzImage
-
-          cp \
-            kernel.release \
-            release/kernel.release
-
-          echo
-          echo "=========================================="
-          echo "BUILD INFORMATION"
-          echo "=========================================="
-
-          KERNEL_RELEASE_ACTUAL="$(cat release/kernel.release)"
-
-          printf '%s\n' \
-            "Source Linux: 6.12.28" \
-            "Target kernel version: 6.12.30" \
-            "PREEMPT_RT: ${RT_VERSION}" \
-            "Kernel release: ${KERNEL_RELEASE_ACTUAL}" \
-            "Architecture: x86_64" \
-            "SMP: enabled" \
-            "PREEMPTION: enabled" \
-            "PREEMPT_RT: enabled" \
-            "PREEMPT_DYNAMIC: disabled" \
-            "MODULES: enabled" \
-            "MODULE_UNLOAD: enabled" \
-            "External module vermagic: verified" \
-            "Compiler: $(gcc --version | head -1)" \
-            "Build date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
-            > release/build-info.txt
-
-          cat \
-            release/build-info.txt
-
-          echo
-          echo "=========================================="
-          echo "CREATE BUILD TREE ARCHIVE"
-          echo "=========================================="
-
-          tar \
-            --exclude='.git' \
-            --exclude='*.o' \
-            --exclude='*.a' \
-            --exclude='*.ko' \
-            --exclude='*.cmd' \
-            --exclude='*.d' \
-            --exclude='*.tmp' \
-            -cJf \
-            "release/linux-${TARGET_VERSION}-daphile-build-tree.tar.xz" \
-            "${KERNEL_DIR}"
-
-          echo
-          echo "=========================================="
-          echo "CREATE CHECKSUMS"
-          echo "=========================================="
-
-          sha256sum \
-            release/config \
-            release/Module.symvers \
-            release/System.map \
-            release/bzImage \
-            release/kernel.release \
-            release/build-info.txt \
-            release/linux-${TARGET_VERSION}-daphile-build-tree.tar.xz \
-            > release/SHA256SUMS
-
-          echo
-          cat \
-            release/SHA256SUMS
-
-          echo
-          echo "=========================================="
-          echo "RELEASE FILES"
-          echo "=========================================="
-
-          ls -lh \
-            release
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-6.12.30-daphile-rt-build
-          path: release
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: linux-6.12.30-daphile-rt
-          name: Daphile Linux 6.12.30 PREEMPT_RT
-          body: |
-            Daphile Linux 6.12.30 PREEMPT_RT kernel.
-
-            Source Linux:
-            6.12.28
-
-            PREEMPT_RT:
-            6.12.28-rt10
-
-            Forced target kernel release:
-            6.12.30-daphile
-
-            Architecture:
-            x86_64
-
-            Configuration:
-            CONFIG_EXPERT=y
-            CONFIG_SMP=y
-            CONFIG_PREEMPTION=y
-            CONFIG_PREEMPT_RT=y
-            CONFIG_PREEMPT_DYNAMIC disabled
-            CONFIG_MODULES=y
-            CONFIG_MODULE_UNLOAD=y
-
-            An external test module was compiled before
-            the final kernel build.
-
-            The test module vermagic was required to contain:
-            6.12.30-daphile ... preempt_rt ... mod_unload
-
-            The build tree is intended for compiling
-            external modules such as Diretta alsa_bridge.ko.
-
-          files: |
-            release/linux-6.12.30-daphile-build-tree.tar.xz
-            release/config
-            release/Module.symvers
-            release/System.map
-            release/kernel.release
-            release/bzImage
-            release/build-info.txt
-            release/SHA256SUMS
+build-kernel:
+runs-on: ubuntu-22.04
+
+steps:
+
+  - name: Checkout repository
+    uses: actions/checkout@v4
+
+  - name: Install build dependencies
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      sudo apt-get update
+
+      sudo apt-get install -y \
+        build-essential \
+        bc \
+        bison \
+        flex \
+        libssl-dev \
+        libelf-dev \
+        libdw-dev \
+        dwarves \
+        cpio \
+        rsync \
+        kmod \
+        xz-utils \
+        zstd \
+        wget \
+        patch
+
+  - name: Download Linux 6.12.28
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      echo "=========================================="
+      echo "DOWNLOAD LINUX SOURCE"
+      echo "=========================================="
+
+      echo "Source version:"
+      echo "${LINUX_VERSION}"
+
+      wget -q \
+        "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VERSION}.tar.xz" \
+        -O \
+        "linux-${LINUX_VERSION}.tar.xz"
+
+      echo
+      echo "Archive:"
+      ls -lh \
+        "linux-${LINUX_VERSION}.tar.xz"
+
+      echo
+      echo "Extracting..."
+
+      tar -xf \
+        "linux-${LINUX_VERSION}.tar.xz"
+
+      mv \
+        "linux-${LINUX_VERSION}" \
+        "linux-${TARGET_VERSION}-daphile"
+
+      echo
+      echo "Kernel source:"
+      ls -ld \
+        "linux-${TARGET_VERSION}-daphile"
+
+  - name: Download PREEMPT_RT patch
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      echo "=========================================="
+      echo "DOWNLOAD PREEMPT_RT PATCH"
+      echo "=========================================="
+
+      echo "RT patch:"
+      echo "${RT_VERSION}"
+
+      wget -q \
+        "https://cdn.kernel.org/pub/linux/kernel/projects/rt/6.12/older/patch-${RT_VERSION}.patch.xz" \
+        -O \
+        "patch-${RT_VERSION}.patch.xz"
+
+      echo
+      echo "RT archive:"
+      ls -lh \
+        "patch-${RT_VERSION}.patch.xz"
+
+      xz -d \
+        "patch-${RT_VERSION}.patch.xz"
+
+      mv \
+        "patch-${RT_VERSION}.patch" \
+        "rt-${RT_VERSION}.patch"
+
+      echo
+      echo "RT patch:"
+      ls -lh \
+        "rt-${RT_VERSION}.patch"
+
+  - name: Verify RT patch
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      echo "=========================================="
+      echo "VERIFY PREEMPT_RT PATCH"
+      echo "=========================================="
+
+      if [ ! -s "rt-${RT_VERSION}.patch" ]; then
+        echo "ERROR: RT patch does not exist."
+        exit 1
+      fi
+
+      echo
+      echo "Patch:"
+      ls -lh \
+        "rt-${RT_VERSION}.patch"
+
+      echo
+      echo "Patch header:"
+      head -30 \
+        "rt-${RT_VERSION}.patch"
+
+  - name: Apply PREEMPT_RT patch
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${TARGET_VERSION}-daphile"
+
+      cd "${KERNEL_DIR}"
+
+      echo "=========================================="
+      echo "APPLY PREEMPT_RT"
+      echo "=========================================="
+
+      echo
+      echo "Kernel source:"
+      pwd
+
+      echo
+      echo "RT patch:"
+      echo "${RT_VERSION}"
+
+      echo
+      echo "=========================================="
+      echo "PATCH DRY RUN"
+      echo "=========================================="
+
+      patch \
+        --dry-run \
+        --batch \
+        --forward \
+        -p1 \
+        < "../rt-${RT_VERSION}.patch"
+
+      echo
+      echo "Dry run successful."
+
+      echo
+      echo "=========================================="
+      echo "APPLY PATCH"
+      echo "=========================================="
+
+      patch \
+        --batch \
+        --forward \
+        -p1 \
+        < "../rt-${RT_VERSION}.patch"
+
+      echo
+      echo "Patch applied."
+
+      echo
+      echo "=========================================="
+      echo "CHECK REJECTS"
+      echo "=========================================="
+
+      REJECTS="$(find . -type f -name '*.rej' -print)"
+
+      if [ -n "${REJECTS}" ]; then
+        echo "ERROR: rejected patch hunks found:"
+        echo "${REJECTS}"
+        exit 1
+      fi
+
+      echo "No rejected hunks."
+
+      echo
+      echo "=========================================="
+      echo "CHECK CONFLICT MARKERS"
+      echo "=========================================="
+
+      CONFLICTS="$(
+        grep -R \
+          -n \
+          -E '^(<<<<<<<|=======|>>>>>>>)' \
+          --exclude-dir=.git \
+          . \
+          2>/dev/null || true
+      )"
+
+      if [ -n "${CONFLICTS}" ]; then
+        echo "ERROR: conflict markers detected:"
+        echo
+        echo "${CONFLICTS}"
+        exit 1
+      fi
+
+      echo "No conflict markers."
+
+  - name: Force kernel version to 6.12.30
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${TARGET_VERSION}-daphile"
+
+      cd "${KERNEL_DIR}"
+
+      echo "=========================================="
+      echo "FORCE KERNEL VERSION"
+      echo "=========================================="
+
+      echo
+      echo "Original kernel version:"
+      make kernelversion
+
+      echo
+      echo "Changing source version:"
+      echo "6.12.28 -> 6.12.30"
+
+      sed -i \
+        's/^VERSION = 6$/VERSION = 6/' \
+        Makefile
+
+      sed -i \
+        's/^PATCHLEVEL = 12$/PATCHLEVEL = 12/' \
+        Makefile
+
+      sed -i \
+        's/^SUBLEVEL = 28$/SUBLEVEL = 30/' \
+        Makefile
+
+      rm -f \
+        localversion-rt
+
+      printf '%s\n' \
+        "${DAPHILE_RELEASE}" \
+        > localversion-daphile
+
+      echo
+      echo "Kernel Makefile version:"
+      grep -E \
+        '^(VERSION|PATCHLEVEL|SUBLEVEL) =' \
+        Makefile
+
+      echo
+      echo "localversion-daphile:"
+      cat \
+        localversion-daphile
+
+      echo
+      echo "Kernel version after modification:"
+      make kernelversion
+
+  - name: Create PREEMPT_RT configuration
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${TARGET_VERSION}-daphile"
+
+      cd "${KERNEL_DIR}"
+
+      echo "=========================================="
+      echo "CREATE PREEMPT_RT CONFIGURATION"
+      echo "=========================================="
+
+      make \
+        ARCH=x86_64 \
+        defconfig
+
+      echo
+      echo "=========================================="
+      echo "ENABLE REQUIRED OPTIONS"
+      echo "=========================================="
+
+      ./scripts/config \
+        --enable CONFIG_EXPERT
+
+      ./scripts/config \
+        --enable CONFIG_SMP
+
+      ./scripts/config \
+        --enable CONFIG_MODULES
+
+      ./scripts/config \
+        --enable CONFIG_MODULE_UNLOAD
+
+      ./scripts/config \
+        --enable CONFIG_PREEMPT_RT
