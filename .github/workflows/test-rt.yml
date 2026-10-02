@@ -1,0 +1,675 @@
+name: Test Linux 6.12.28 PREEMPT_RT
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  LINUX_VERSION: "6.12.28"
+  RT_VERSION: "6.12.28-rt10"
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-22.04
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            libdw-dev \
+            dwarves \
+            cpio \
+            rsync \
+            kmod \
+            xz-utils \
+            zstd \
+            wget \
+            patch
+
+      - name: Download Linux 6.12.28
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "DOWNLOAD LINUX ${LINUX_VERSION}"
+          echo "=========================================="
+
+          wget -q \
+            "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VERSION}.tar.xz"
+
+          tar -xf \
+            "linux-${LINUX_VERSION}.tar.xz"
+
+          echo
+          echo "Linux source:"
+          ls -ld \
+            "linux-${LINUX_VERSION}"
+
+      - name: Download PREEMPT_RT patch
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "DOWNLOAD PREEMPT_RT PATCH"
+          echo "=========================================="
+
+          echo "Linux version:"
+          echo "${LINUX_VERSION}"
+
+          echo "RT version:"
+          echo "${RT_VERSION}"
+
+          wget -q \
+            "https://cdn.kernel.org/pub/linux/kernel/projects/rt/6.12/older/patch-${RT_VERSION}.patch.xz" \
+            -O \
+            "patch-${RT_VERSION}.patch.xz"
+
+          xz -d \
+            "patch-${RT_VERSION}.patch.xz"
+
+          echo
+          echo "RT patch:"
+          ls -lh \
+            "patch-${RT_VERSION}.patch"
+
+      - name: Verify RT patch
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "VERIFY RT PATCH"
+          echo "=========================================="
+
+          if [ ! -s "patch-${RT_VERSION}.patch" ]; then
+            echo "ERROR: RT patch does not exist."
+            exit 1
+          fi
+
+          echo
+          echo "Patch file:"
+          ls -lh \
+            "patch-${RT_VERSION}.patch"
+
+          echo
+          echo "Patch header:"
+          head -30 \
+            "patch-${RT_VERSION}.patch"
+
+      - name: Apply PREEMPT_RT patch
+        run: |
+          set -euo pipefail
+
+          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${LINUX_VERSION}"
+
+          cd "${KERNEL_DIR}"
+
+          echo "=========================================="
+          echo "APPLY PREEMPT_RT PATCH"
+          echo "=========================================="
+
+          echo
+          echo "Kernel source:"
+          echo "${KERNEL_DIR}"
+
+          echo
+          echo "RT patch:"
+          echo "../patch-${RT_VERSION}.patch"
+
+          echo
+          echo "=========================================="
+          echo "PATCH DRY RUN"
+          echo "=========================================="
+
+          patch \
+            --dry-run \
+            --batch \
+            --forward \
+            -p1 \
+            < "../patch-${RT_VERSION}.patch"
+
+          echo
+          echo "PATCH DRY RUN PASSED"
+
+          echo
+          echo "=========================================="
+          echo "APPLY PATCH"
+          echo "=========================================="
+
+          patch \
+            --batch \
+            --forward \
+            -p1 \
+            < "../patch-${RT_VERSION}.patch"
+
+          echo
+          echo "PATCH APPLIED"
+
+          echo
+          echo "=========================================="
+          echo "CHECK REJECTED HUNKS"
+          echo "=========================================="
+
+          REJECTS="$(
+            find . \
+              -type f \
+              -name '*.rej' \
+              -print
+          )"
+
+          if [ -n "${REJECTS}" ]; then
+            echo "ERROR: rejected patch hunks found:"
+            echo
+            echo "${REJECTS}"
+            exit 1
+          fi
+
+          echo "No rejected hunks."
+
+          echo
+          echo "=========================================="
+          echo "CHECK CONFLICT MARKERS"
+          echo "=========================================="
+
+          CONFLICTS="$(
+            grep -R \
+              -n \
+              -E '^(<<<<<<<|=======|>>>>>>>)' \
+              --exclude-dir=.git \
+              . \
+              2>/dev/null || true
+          )"
+
+          if [ -n "${CONFLICTS}" ]; then
+            echo "ERROR: conflict markers found:"
+            echo
+            echo "${CONFLICTS}"
+            exit 1
+          fi
+
+          echo "No conflict markers."
+
+          echo
+          echo "=========================================="
+          echo "PREEMPT_RT PATCH APPLIED"
+          echo "=========================================="
+
+          if [ -f "localversion-rt" ]; then
+            echo
+            echo "localversion-rt:"
+            cat localversion-rt
+          fi
+
+      - name: Create kernel configuration
+        run: |
+          set -euo pipefail
+
+          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${LINUX_VERSION}"
+
+          cd "${KERNEL_DIR}"
+
+          echo "=========================================="
+          echo "CREATE KERNEL CONFIGURATION"
+          echo "=========================================="
+
+          make \
+            ARCH=x86_64 \
+            defconfig
+
+          echo
+          echo "=========================================="
+          echo "ENABLE PREEMPT_RT"
+          echo "=========================================="
+
+          ./scripts/config \
+            --enable CONFIG_PREEMPT_RT
+
+          echo
+          echo "=========================================="
+          echo "DISABLE PREEMPT_DYNAMIC"
+          echo "=========================================="
+
+          ./scripts/config \
+            --disable CONFIG_PREEMPT_DYNAMIC
+
+          echo
+          echo "=========================================="
+          echo "ENABLE MODULES"
+          echo "=========================================="
+
+          ./scripts/config \
+            --enable CONFIG_MODULES
+
+          ./scripts/config \
+            --enable CONFIG_MODULE_UNLOAD
+
+          echo
+          echo "=========================================="
+          echo "NORMALIZE CONFIGURATION"
+          echo "=========================================="
+
+          make \
+            ARCH=x86_64 \
+            olddefconfig
+
+          echo
+          echo "=========================================="
+          echo "CONFIGURATION AFTER OLDDEFCONFIG"
+          echo "=========================================="
+
+          grep -E \
+            '^CONFIG_PREEMPT=|^CONFIG_PREEMPT_RT=|^CONFIG_PREEMPT_DYNAMIC=|^CONFIG_MODULES=|^CONFIG_MODULE_UNLOAD=' \
+            .config \
+            || true
+
+      - name: Verify PREEMPT_RT configuration
+        run: |
+          set -euo pipefail
+
+          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${LINUX_VERSION}"
+
+          cd "${KERNEL_DIR}"
+
+          echo "=========================================="
+          echo "VERIFY PREEMPT_RT CONFIGURATION"
+          echo "=========================================="
+
+          echo
+          echo "CONFIG_PREEMPT:"
+          grep '^CONFIG_PREEMPT=' \
+            .config \
+            || true
+
+          echo
+          echo "CONFIG_PREEMPT_RT:"
+          grep '^CONFIG_PREEMPT_RT=' \
+            .config \
+            || true
+
+          echo
+          echo "CONFIG_PREEMPT_DYNAMIC:"
+          grep '^CONFIG_PREEMPT_DYNAMIC=' \
+            .config \
+            || true
+
+          echo
+          echo "CONFIG_MODULES:"
+          grep '^CONFIG_MODULES=' \
+            .config \
+            || true
+
+          echo
+          echo "CONFIG_MODULE_UNLOAD:"
+          grep '^CONFIG_MODULE_UNLOAD=' \
+            .config \
+            || true
+
+          echo
+          echo "=========================================="
+          echo "HARD CONFIG CHECK"
+          echo "=========================================="
+
+          if ! grep -q '^CONFIG_PREEMPT_RT=y' .config; then
+            echo "ERROR: CONFIG_PREEMPT_RT=y is missing."
+            exit 1
+          fi
+
+          if grep -q '^CONFIG_PREEMPT_DYNAMIC=y' .config; then
+            echo "ERROR: CONFIG_PREEMPT_DYNAMIC=y"
+            exit 1
+          fi
+
+          if ! grep -q '^CONFIG_MODULES=y' .config; then
+            echo "ERROR: CONFIG_MODULES=y is missing."
+            exit 1
+          fi
+
+          if ! grep -q '^CONFIG_MODULE_UNLOAD=y' .config; then
+            echo "ERROR: CONFIG_MODULE_UNLOAD=y is missing."
+            exit 1
+          fi
+
+          echo
+          echo "PREEMPT_RT configuration passed."
+
+      - name: Prepare kernel
+        run: |
+          set -euo pipefail
+
+          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${LINUX_VERSION}"
+
+          cd "${KERNEL_DIR}"
+
+          echo "=========================================="
+          echo "PREPARE KERNEL"
+          echo "=========================================="
+
+          make \
+            ARCH=x86_64 \
+            prepare
+
+          make \
+            ARCH=x86_64 \
+            modules_prepare
+
+      - name: Verify kernel release
+        run: |
+          set -euo pipefail
+
+          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${LINUX_VERSION}"
+
+          cd "${KERNEL_DIR}"
+
+          echo "=========================================="
+          echo "VERIFY KERNEL RELEASE"
+          echo "=========================================="
+
+          KERNEL_RELEASE_ACTUAL="$(make kernelrelease)"
+
+          echo
+          echo "Kernel release:"
+          echo "${KERNEL_RELEASE_ACTUAL}"
+
+          printf '%s\n' \
+            "${KERNEL_RELEASE_ACTUAL}" \
+            > "${GITHUB_WORKSPACE}/kernel.release"
+
+      - name: Build kernel
+        run: |
+          set -euo pipefail
+
+          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${LINUX_VERSION}"
+
+          cd "${KERNEL_DIR}"
+
+          echo "=========================================="
+          echo "BUILD PREEMPT_RT KERNEL"
+          echo "=========================================="
+
+          NPROC="$(nproc)"
+
+          echo
+          echo "CPU threads:"
+          echo "${NPROC}"
+
+          make \
+            ARCH=x86_64 \
+            -j"${NPROC}" \
+            bzImage \
+            modules
+
+      - name: Verify kernel build
+        run: |
+          set -euo pipefail
+
+          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${LINUX_VERSION}"
+
+          cd "${KERNEL_DIR}"
+
+          echo "=========================================="
+          echo "VERIFY KERNEL BUILD"
+          echo "=========================================="
+
+          echo
+          echo "Kernel version:"
+          make kernelversion
+
+          echo
+          echo "Kernel release:"
+          make kernelrelease
+
+          echo
+          echo "CONFIG_PREEMPT:"
+          grep '^CONFIG_PREEMPT=' \
+            .config
+
+          echo
+          echo "CONFIG_PREEMPT_RT:"
+          grep '^CONFIG_PREEMPT_RT=' \
+            .config
+
+          echo
+          echo "CONFIG_PREEMPT_DYNAMIC:"
+          grep '^CONFIG_PREEMPT_DYNAMIC=' \
+            .config \
+            || true
+
+          echo
+          echo "Kernel image:"
+          ls -lh \
+            arch/x86/boot/bzImage
+
+          echo
+          echo "Module.symvers:"
+          ls -lh \
+            Module.symvers
+
+          echo
+          echo "System.map:"
+          ls -lh \
+            System.map
+
+      - name: Verify external module PREEMPT_RT
+        run: |
+          set -euo pipefail
+
+          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${LINUX_VERSION}"
+          TEST_DIR="${GITHUB_WORKSPACE}/test-external-module"
+
+          echo "=========================================="
+          echo "VERIFY EXTERNAL MODULE PREEMPT_RT"
+          echo "=========================================="
+
+          echo
+          echo "Kernel build tree:"
+          echo "${KERNEL_DIR}"
+
+          cd "${KERNEL_DIR}"
+
+          echo
+          echo "Kernel release:"
+          KERNEL_RELEASE_ACTUAL="$(make kernelrelease)"
+          echo "${KERNEL_RELEASE_ACTUAL}"
+
+          rm -rf \
+            "${TEST_DIR}"
+
+          mkdir -p \
+            "${TEST_DIR}"
+
+          printf '%s\n' \
+            '#include <linux/module.h>' \
+            '#include <linux/kernel.h>' \
+            '' \
+            'static int __init test_module_init(void)' \
+            '{' \
+            '    pr_info("Daphile PREEMPT_RT module test loaded\n");' \
+            '    return 0;' \
+            '}' \
+            '' \
+            'static void __exit test_module_exit(void)' \
+            '{' \
+            '    pr_info("Daphile PREEMPT_RT module test unloaded\n");' \
+            '}' \
+            '' \
+            'module_init(test_module_init);' \
+            'module_exit(test_module_exit);' \
+            '' \
+            'MODULE_LICENSE("GPL");' \
+            'MODULE_AUTHOR("Daphile");' \
+            'MODULE_DESCRIPTION("Daphile PREEMPT_RT external module test");' \
+            > "${TEST_DIR}/test_module.c"
+
+          printf '%s\n' \
+            'obj-m += test_module.o' \
+            > "${TEST_DIR}/Makefile"
+
+          echo
+          echo "Test source:"
+          cat \
+            "${TEST_DIR}/test_module.c"
+
+          echo
+          echo "Test Makefile:"
+          cat \
+            "${TEST_DIR}/Makefile"
+
+          echo
+          echo "=========================================="
+          echo "BUILD TEST MODULE"
+          echo "=========================================="
+
+          make \
+            -C "${KERNEL_DIR}" \
+            ARCH=x86_64 \
+            M="${TEST_DIR}" \
+            modules
+
+          KO="${TEST_DIR}/test_module.ko"
+
+          if [ ! -f "${KO}" ]; then
+            echo
+            echo "ERROR: test_module.ko was not generated."
+            exit 1
+          fi
+
+          echo
+          echo "=========================================="
+          echo "VERIFY TEST MODULE"
+          echo "=========================================="
+
+          echo
+          echo "Module:"
+          ls -lh \
+            "${KO}"
+
+          echo
+          echo "File:"
+          file \
+            "${KO}"
+
+          echo
+          echo "modinfo:"
+          modinfo \
+            "${KO}"
+
+          TEST_VERMAGIC="$(modinfo -F vermagic "${KO}")"
+
+          echo
+          echo "=========================================="
+          echo "ACTUAL VERMAGIC"
+          echo "=========================================="
+
+          echo "${TEST_VERMAGIC}"
+
+          echo
+          echo "=========================================="
+          echo "VERIFY PREEMPT_RT VERMAGIC"
+          echo "=========================================="
+
+          case "${TEST_VERMAGIC}" in
+            *preempt_rt*mod_unload*)
+              echo
+              echo "PREEMPT_RT vermagic VERIFIED."
+              ;;
+            *)
+              echo
+              echo "ERROR: PREEMPT_RT vermagic is incorrect."
+              echo
+              echo "Expected:"
+              echo "preempt_rt ... mod_unload"
+              echo
+              echo "Actual:"
+              echo "${TEST_VERMAGIC}"
+              exit 1
+              ;;
+          esac
+
+          echo
+          echo "=========================================="
+          echo "EXTERNAL MODULE PREEMPT_RT VERIFIED"
+          echo "=========================================="
+
+      - name: Create test artifact
+        run: |
+          set -euo pipefail
+
+          KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${LINUX_VERSION}"
+
+          rm -rf \
+            release
+
+          mkdir -p \
+            release
+
+          cp \
+            "${KERNEL_DIR}/arch/x86/boot/bzImage" \
+            release/bzImage
+
+          cp \
+            "${KERNEL_DIR}/.config" \
+            release/config
+
+          cp \
+            "${KERNEL_DIR}/Module.symvers" \
+            release/Module.symvers
+
+          cp \
+            "${KERNEL_DIR}/System.map" \
+            release/System.map
+
+          cp \
+            "${GITHUB_WORKSPACE}/kernel.release" \
+            release/kernel.release
+
+          cp \
+            "${GITHUB_WORKSPACE}/test-external-module/test_module.ko" \
+            release/test_module.ko
+
+          KERNEL_RELEASE_ACTUAL="$(cat release/kernel.release)"
+
+          printf '%s\n' \
+            "Linux version: ${LINUX_VERSION}" \
+            "PREEMPT_RT: ${RT_VERSION}" \
+            "Kernel release: ${KERNEL_RELEASE_ACTUAL}" \
+            "Architecture: x86_64" \
+            "CONFIG_PREEMPT_RT=y" \
+            "CONFIG_PREEMPT_DYNAMIC=n" \
+            "CONFIG_MODULES=y" \
+            "CONFIG_MODULE_UNLOAD=y" \
+            "External module vermagic: PREEMPT_RT verified" \
+            "Build date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
+            > release/build-info.txt
+
+          sha256sum \
+            release/* \
+            > release/SHA256SUMS
+
+          echo
+          echo "=========================================="
+          echo "RELEASE FILES"
+          echo "=========================================="
+
+          ls -lh \
+            release
+
+      - name: Upload test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ env.LINUX_VERSION }}-rt-test
+          path: release
