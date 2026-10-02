@@ -63,7 +63,7 @@ jobs:
           rm -f "patch-${RT_VERSION}.patch.xz"
 
           wget -q \
-            "https://cdn.kernel.org/pub/linux/kernel/projects/rt/6.12/patch-${RT_VERSION}.patch.xz"
+            "https://cdn.kernel.org/pub/linux/kernel/projects/rt/6.12/older/patches-6.12.28-rt10.tar.xz"
 
           unxz "patch-${RT_VERSION}.patch.xz"
 
