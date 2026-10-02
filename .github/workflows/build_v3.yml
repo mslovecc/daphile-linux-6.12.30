@@ -602,4 +602,328 @@ steps:
         .config
 
       echo
-      echo "CONFIG_MODULE_
+      echo "CONFIG_MODULE_UNLOAD:"
+      grep \
+        '^CONFIG_MODULE_UNLOAD=' \
+        .config
+
+      echo
+      echo "Kernel image:"
+      ls -lh \
+        arch/x86/boot/bzImage
+
+      echo
+      echo "Module.symvers:"
+      ls -lh \
+        Module.symvers
+
+      echo
+      echo "System.map:"
+      ls -lh \
+        System.map
+
+  - name: Verify external module PREEMPT_RT
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${LINUX_SOURCE_VERSION}-daphile"
+      TEST_DIR="${GITHUB_WORKSPACE}/test-external-module"
+
+      echo "=========================================="
+      echo "VERIFY EXTERNAL MODULE PREEMPT_RT"
+      echo "=========================================="
+
+      cd \
+        "${KERNEL_DIR}"
+
+      ACTUAL_KERNEL_RELEASE="$(
+        make \
+          -s \
+          ARCH=x86_64 \
+          kernelrelease
+      )"
+
+      echo
+      echo "Kernel release:"
+      echo "${ACTUAL_KERNEL_RELEASE}"
+
+      if [ "${ACTUAL_KERNEL_RELEASE}" != "${KERNEL_RELEASE}" ]; then
+        echo
+        echo "ERROR: kernel release mismatch"
+        exit 1
+      fi
+
+      rm -rf \
+        "${TEST_DIR}"
+
+      mkdir -p \
+        "${TEST_DIR}"
+
+      cat > "${TEST_DIR}/test_module.c" <<'EOF'
+```
+
+#include <linux/module.h>
+#include <linux/kernel.h>
+
+static int __init test_module_init(void)
+{
+pr_info("Daphile PREEMPT_RT module test loaded\n");
+return 0;
+}
+
+static void __exit test_module_exit(void)
+{
+pr_info("Daphile PREEMPT_RT module test unloaded\n");
+}
+
+module_init(test_module_init);
+module_exit(test_module_exit);
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Daphile");
+MODULE_DESCRIPTION("Daphile PREEMPT_RT external module test");
+EOF
+
+```
+      cat > "${TEST_DIR}/Makefile" <<'EOF'
+```
+
+obj-m += test_module.o
+EOF
+
+```
+      echo
+      echo "=========================================="
+      echo "BUILD TEST MODULE"
+      echo "=========================================="
+
+      make \
+        -C "${KERNEL_DIR}" \
+        ARCH=x86_64 \
+        M="${TEST_DIR}" \
+        modules
+
+      KO="${TEST_DIR}/test_module.ko"
+
+      if [ ! -f "${KO}" ]; then
+        echo
+        echo "ERROR: test_module.ko was not generated."
+        exit 1
+      fi
+
+      echo
+      echo "=========================================="
+      echo "VERIFY TEST MODULE"
+      echo "=========================================="
+
+      ls -lh \
+        "${KO}"
+
+      echo
+      echo "File:"
+      file \
+        "${KO}"
+
+      echo
+      echo "modinfo:"
+      modinfo \
+        "${KO}"
+
+      TEST_VERMAGIC="$(
+        modinfo \
+          -F vermagic \
+          "${KO}"
+      )"
+
+      echo
+      echo "=========================================="
+      echo "ACTUAL VERMAGIC"
+      echo "=========================================="
+
+      echo "${TEST_VERMAGIC}"
+
+      echo
+      echo "=========================================="
+      echo "VERIFY PREEMPT_RT VERMAGIC"
+      echo "=========================================="
+
+      case "${TEST_VERMAGIC}" in
+        "${KERNEL_RELEASE}"*"preempt_rt"*"mod_unload"*)
+          echo
+          echo "PREEMPT_RT vermagic VERIFIED."
+          ;;
+        *)
+          echo
+          echo "ERROR: PREEMPT_RT vermagic is incorrect."
+          echo
+          echo "Expected:"
+          echo "${KERNEL_RELEASE} ... preempt_rt ... mod_unload"
+          echo
+          echo "Actual:"
+          echo "${TEST_VERMAGIC}"
+          exit 1
+          ;;
+      esac
+
+      echo
+      echo "=========================================="
+      echo "EXTERNAL MODULE PREEMPT_RT VERIFIED"
+      echo "=========================================="
+
+  - name: Create release package
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      KERNEL_DIR="${GITHUB_WORKSPACE}/linux-${LINUX_SOURCE_VERSION}-daphile"
+
+      rm -rf \
+        release
+
+      mkdir -p \
+        release
+
+      echo "=========================================="
+      echo "CREATE RELEASE PACKAGE"
+      echo "=========================================="
+
+      cp \
+        "${KERNEL_DIR}/.config" \
+        release/config
+
+      cp \
+        "${KERNEL_DIR}/Module.symvers" \
+        release/Module.symvers
+
+      cp \
+        "${KERNEL_DIR}/System.map" \
+        release/System.map
+
+      cp \
+        "${KERNEL_DIR}/arch/x86/boot/bzImage" \
+        release/bzImage
+
+      cp \
+        "${GITHUB_WORKSPACE}/kernel.release" \
+        release/kernel.release
+
+      ACTUAL_RELEASE="$(
+        cat \
+          release/kernel.release
+      )"
+
+      printf '%s\n' \
+        "Linux source version: ${LINUX_SOURCE_VERSION}" \
+        "PREEMPT_RT patch: ${RT_VERSION}" \
+        "Kernel release: ${ACTUAL_RELEASE}" \
+        "Architecture: x86_64" \
+        "SMP: enabled" \
+        "PREEMPT_RT: enabled" \
+        "PREEMPT_DYNAMIC: disabled" \
+        "MODULES: enabled" \
+        "MODULE_UNLOAD: enabled" \
+        "External module vermagic: verified" \
+        "Compiler: $(gcc --version | head -1)" \
+        "Build date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
+        > release/build-info.txt
+
+      echo
+      echo "=========================================="
+      echo "BUILD INFORMATION"
+      echo "=========================================="
+
+      cat \
+        release/build-info.txt
+
+      echo
+      echo "=========================================="
+      echo "CREATE BUILD TREE ARCHIVE"
+      echo "=========================================="
+
+      tar \
+        --exclude='.git' \
+        --exclude='*.o' \
+        --exclude='*.a' \
+        --exclude='*.ko' \
+        --exclude='*.tmp' \
+        --exclude='*.cmd' \
+        --exclude='*.d' \
+        -cJf \
+        "release/linux-6.12.30-daphile-build-tree.tar.xz" \
+        "${KERNEL_DIR}"
+
+      echo
+      echo "=========================================="
+      echo "SHA256"
+      echo "=========================================="
+
+      sha256sum \
+        release/* \
+        > release/SHA256SUMS
+
+      echo
+      echo "=========================================="
+      echo "RELEASE FILES"
+      echo "=========================================="
+
+      ls -lh \
+        release
+
+  - name: Upload build artifact
+    uses: actions/upload-artifact@v4
+    with:
+      name: linux-6.12.30-daphile-rt-build
+      path: release
+
+  - name: Create GitHub Release
+    uses: softprops/action-gh-release@v2
+    with:
+      tag_name: linux-6.12.30-daphile-rt
+      name: Daphile Linux 6.12.30 PREEMPT_RT
+      body: |
+        Daphile PREEMPT_RT kernel build.
+
+        Linux source:
+        6.12.28
+
+        PREEMPT_RT:
+        6.12.28-rt10
+
+        Final kernel release:
+        6.12.30-daphile
+
+        Architecture:
+        x86_64
+
+        Configuration:
+        CONFIG_EXPERT=y
+        CONFIG_SMP=y
+        CONFIG_PREEMPT_RT=y
+        CONFIG_PREEMPT_DYNAMIC=n
+        CONFIG_MODULES=y
+        CONFIG_MODULE_UNLOAD=y
+
+        An external test module was compiled from
+        the resulting kernel build tree.
+
+        Its modinfo vermagic was required to contain:
+
+        6.12.30-daphile
+        SMP
+        preempt_rt
+        mod_unload
+
+        The build tree is intended for compiling
+        external kernel modules such as Diretta
+        alsa_bridge.ko.
+
+      files: |
+        release/linux-6.12.30-daphile-build-tree.tar.xz
+        release/config
+        release/Module.symvers
+        release/System.map
+        release/kernel.release
+        release/bzImage
+        release/build-info.txt
+        release/SHA256SUMS
