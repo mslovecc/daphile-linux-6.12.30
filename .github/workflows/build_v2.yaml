@@ -1,4 +1,4 @@
-name: Build Daphile Linux 6.12.30 PREEMPT_RT
+name: Build Daphile Linux 6.12.30 PREEMPT_RT v2
 
 on:
   workflow_dispatch:
